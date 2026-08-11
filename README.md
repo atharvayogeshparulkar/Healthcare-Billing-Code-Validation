@@ -113,8 +113,8 @@ Diagnosis-procedure validation can never be a fully solved, static problem: code
 ## Repository Contents
 
 ```
-├── full_project.sql                                  # Complete MySQL schema + sample data + views (run this end-to-end)
-├── Healthcare_Billing_Dashboard_2Sheet.xlsx           # Excel dashboard (Dataset sheet + Dashboard sheet, live formulas)
+├── Healthcare_Project_Code.sql                        # Complete MySQL schema + sample data + views (run this end-to-end)
+├── Healthcare_Billing_Dashboard.xlsx                  # Excel dashboard (Dataset sheet + Dashboard sheet, live formulas)
 ├── Healthcare_Billing_Case_Study.docx                 # Full write-up: problem, solution, impact, risk management
 ├── Healthcare_Billing_Project_Tech_Stack_Summary.docx # Tech-stack-focused summary
 └── README.md
@@ -123,10 +123,10 @@ Diagnosis-procedure validation can never be a fully solved, static problem: code
 ## How to Run This
 
 1. Open MySQL Workbench, connect to your local server
-2. File → Open SQL Script → select `full_project.sql`
+2. File → Open SQL Script → select `Healthcare_Project_Code.sql`
 3. Execute All (lightning bolt icon) — this drops/recreates a `healthcare_billing` database, builds all 6 tables, loads sample data, creates the 4 validation views, and runs sanity-check queries automatically
 4. Confirm the denial-rate gradient shows up as expected: `SELECT * FROM v_denial_risk_summary;` should show NO_MATCH with a clearly higher denial rate than HIGH
-5. For the dashboard: open `Healthcare_Billing_Dashboard_2Sheet.xlsx` in Excel. The Dataset sheet holds the flat claim-level data; the Dashboard sheet's KPIs and charts are all live formulas referencing it — edit a row in Dataset and watch the Dashboard update
+5. For the dashboard: open `Healthcare_Billing_Dashboard.xlsx` in Excel. The Dataset sheet holds the flat claim-level data; the Dashboard sheet's KPIs and charts are all live formulas referencing it — edit a row in Dataset and watch the Dashboard update
 
 > Note: MySQL only enforces `CHECK` constraints from version 8.0.16 onward. Run `SELECT VERSION();` first if constraints seem to be ignored.
 
