@@ -1,8 +1,8 @@
-# Healthcare Billing Code Validation & Denial-Risk Analytics
+# ICD-10 to CPT/HCPCS Crosswalk
 
-A SQL database and Excel dashboard project that validates whether ICD-10 diagnosis codes and CPT/HCPCS procedure codes on a medical claim form a clinically justifiable pairing, flags likely-to-deny claims before submission using a confidence-tier system, and visualizes denial risk by code, category, and payer.
+A simple SQL database and Excel dashboard project that checks whether a diagnosis code (ICD-10) and a procedure code (CPT/HCPCS) on a medical claim form a recognized, billable pairing — and lets that confidence grade alone decide the outcome.
 
-**Core result:** claims tagged HIGH confidence denied at ~4.6%; claims with no valid diagnosis-procedure relationship found (NO_MATCH) denied at ~78%. That gradient is the evidence the validation logic works.
+**Core result:** each crosswalk confidence tier maps to exactly one decision. HIGH is always APPROVED, MEDIUM is always HUMAN_REVIEW, LOW or unmatched is always DENIED. No overlap, no exceptions.
 
 ---
 
@@ -20,79 +20,66 @@ A SQL database and Excel dashboard project that validates whether ICD-10 diagnos
 
 ## Problem Statement
 
-Every medical claim submitted to an insurance payer requires two linked pieces of information: a diagnosis code (ICD-10-CM) explaining why the patient was seen, and a procedure/service code (CPT or HCPCS Level II) explaining what was done. Payers evaluate "medical necessity" by checking whether the billed procedure is clinically justified by the stated diagnosis.
+Billing teams need a quick way to check whether a diagnosis-procedure pairing on a claim is actually recognized before the claim goes out the door. Without a centralized reference, that check is either skipped, done manually, or discovered only after a denial comes back — all of which cost time and money that a simple lookup could avoid.
 
-In practice, this diagnosis-to-procedure linkage is validated manually or with limited automation in many billing workflows. That gap creates three recurring problems:
-
-- Claim denials and payment delays caused by diagnosis/procedure mismatches that are only caught after submission, not before.
-- No centralized, queryable reference that billing staff or analysts can use to check whether a code pairing is likely to be reimbursed.
-- No systematic way to flag high-risk pairings before they go out the door, so errors are found reactively rather than proactively, driving rework, delayed cash flow, and administrative cost.
-
-This project builds a relational database and validation layer that addresses that gap directly, using publicly available code sets and a synthetic claims dataset that mirrors real-world billing patterns.
+This project builds a small, clear database that answers one question directly: how confident are we that this pairing is legitimate, and what should happen to the claim as a result?
 
 ## Solution
 
 ### Database Design
-A relational database (MySQL) with six core tables that separate reference data from transactional data from audit output:
+A relational database (MySQL) with four core tables:
 
 | Table | Purpose |
 |---|---|
-| `diagnoses` | ICD-10-CM codes, descriptions, and clinical category grouping (25 sample codes across 12 clinical domains) |
-| `procedures` | CPT and HCPCS-II codes with generic labels and service category (36 sample codes) |
-| `code_pairings_reference` | Medical-necessity logic: which procedure categories are typically justified by which diagnosis categories, tagged with a confidence tier |
-| `claims` | Claim-line data: patient, payer, service date, diagnosis code, procedure code, billed amount, status, denial reason (200 sample claims) |
-| `claim_flags` | Audit trail of validation output: which claims were flagged, at what confidence tier, and how a reviewer resolved the flag |
-| `denial_feedback` | Aggregated real-world outcomes per diagnosis/procedure pair; the feedback loop described below |
+| `diagnoses` | ICD-10-CM codes, descriptions, and category (12 sample codes) |
+| `procedures` | CPT and HCPCS-II codes with generic labels and category (15 sample codes) |
+| `crosswalk` | Which specific diagnosis-procedure pairs are recognized, graded HIGH/MEDIUM/LOW confidence (25 sample pairings) |
+| `claims` | Claim-line data: patient, payer, service date, diagnosis code, procedure code, billed amount (150 sample claims) |
 
 ### Validation Logic
-Every claim is evaluated by joining its diagnosis category to its procedure category against the reference table. Instead of a binary valid/invalid outcome, each pairing resolves to one of four confidence tiers, the same triage approach real revenue-cycle-management systems use rather than auto-rejecting everything uncertain:
+Every claim is evaluated with a single `LEFT JOIN` from `claims` to `crosswalk`, so an unrecognized pairing surfaces as `NULL` rather than disappearing from results, then `COALESCE()` labels it `NO_MATCH`. One `CASE` statement maps the resulting tier directly to a decision:
 
-- **HIGH** — well-established, routinely reimbursed pairing (e.g. diabetes diagnosis + A1c lab test)
-- **MEDIUM** — plausible pairing that depends on clinical context and is not automatically approved (e.g. cardiovascular diagnosis + CT imaging)
-- **REVIEW** — pairing exists but has historically drawn high payer scrutiny (e.g. chest pain + EKG in the ED)
-- **NO_MATCH** — no reference relationship found between the diagnosis and procedure category; highest denial risk
+- **APPROVED** — crosswalk confidence is HIGH
+- **HUMAN_REVIEW** — crosswalk confidence is MEDIUM
+- **DENIED** — crosswalk confidence is LOW, or no crosswalk entry exists at all
 
-This logic lives in SQL views so it can be queried directly or fed into a BI tool, rather than being recomputed ad hoc every time someone needs an answer.
+This logic lives in one SQL view, `v_claims`, so it can be queried directly or fed into a BI tool.
 
 ### Dashboard
-An Excel workbook presents the validation output: KPI cards for total claims, overall denial rate, and dollars at risk; a denial-rate-by-confidence-tier chart; a denial-rate-by-payer chart; and drill-down tables. KPI cards use live spreadsheet formulas against the raw claims data rather than hardcoded numbers, so the dashboard recalculates if the underlying data changes.
+An Excel workbook with three tabs: a ReadMe tab with the project overview, a Dataset tab with all 150 claims joined and labeled, and a Dashboard tab with KPI cards and a decision-by-confidence-tier chart. KPI cards use live spreadsheet formulas against the raw claims data rather than hardcoded numbers.
 
 ## Impact
 
-| Confidence Tier | Claims | Denial Rate | Dollars Billed | Dollars Denied |
-|---|---|---|---|---|
-| HIGH | 109 | 4.6% | $225,064 | $7,553 |
-| MEDIUM | 50 | 30.0% | $101,157 | $40,870 |
-| NO_MATCH | 41 | 78.0% | $95,823 | $76,129 |
+| Decision | Claims | Driven By |
+|---|---|---|
+| APPROVED | 75 | HIGH-confidence crosswalk pairing |
+| HUMAN_REVIEW | 18 | MEDIUM-confidence crosswalk pairing |
+| DENIED | 57 | LOW-confidence or unrecognized pairing |
 
-- Separated claims into risk tiers spanning a 4.6% to 78% denial-rate range, showing the model successfully isolates high-risk billing pairs before submission.
-- NO_MATCH pairings, roughly 21% of claim volume, accounted for over 39% of all denied dollars in the sample — the highest-leverage segment for pre-submission review.
-- Denial rate by payer ranged from 7.4% to 42.3% across 7 simulated payers, helping prioritize which payer relationships need the most billing-process attention.
+- Every claim's decision is fully explained by a single factor: its crosswalk confidence tier. There's no second variable muddying the result.
+- Unrecognized pairings (NO_MATCH), 34 of the 57 denials, are the single largest driver of denied claims in the sample — the clearest signal of where the crosswalk itself needs to be expanded.
+- That one-to-one mapping is verifiable directly in SQL: `SELECT crosswalk_confidence, claim_decision, COUNT(*) FROM v_claims GROUP BY crosswalk_confidence, claim_decision;`
 
-In a production setting, flagging NO_MATCH and REVIEW-tier claims before submission, rather than after denial, is the mechanism that converts this analysis into reduced rework, faster reimbursement, and lower administrative cost per claim.
+In a production setting, a DENIED claim always points a coder straight to the crosswalk table — either the pairing needs to be added, or it genuinely isn't billable — with no other explanation to rule out first.
 
 ## Risk Management
 
-Diagnosis-procedure validation can never be a fully solved, static problem: code sets update annually, payer-specific medical necessity rules vary and change, and no reference table can anticipate every legitimate clinical edge case. Rather than treating a rules table as sufficient on its own, the project manages residual risk through five mechanisms:
+Diagnosis-procedure recognition can never be a fully solved, static problem — new or rare combinations will always exist that the crosswalk hasn't graded yet. This project manages that risk with one deliberate choice:
 
-1. **Confidence tiers instead of binary pass/fail** — uncertain pairings (MEDIUM/REVIEW) route to a human reviewer instead of being auto-approved or auto-rejected.
-2. **Versioning** — every diagnosis/procedure record carries a `code_version_year` field, since ICD-10-CM, CPT, and HCPCS all release annual updates.
-3. **Audit trail** — the `claim_flags` table logs every flag raised and how it was resolved (approved, overridden, pending review).
-4. **Feedback loop** — the `denial_feedback` table aggregates real submission/denial outcomes per code pair over time, so reference logic can be improved from actual results.
-5. **Escalation, not elimination** — the goal is to shrink the pool of claims needing manual review to the smallest, highest-risk subset, not remove human review entirely.
+1. **Safe default for unknowns** — a pairing with no crosswalk entry at all defaults to `NO_MATCH`, which resolves to DENIED rather than being silently approved. An unrecognized pairing never sneaks through as a false positive.
+
+This version intentionally does not include an audit-trail table or a feedback loop to recalibrate confidence grades from real outcomes over time — that would be the natural next addition if this were extended toward production use. For a portfolio-scale project, keeping the schema to four tables and one view was a deliberate trade-off: easier to read and verify end to end, at the cost of that recalibration capability.
 
 ## Tech Stack
 
 **Database Layer**
-- MySQL (MySQL Workbench) — 6 normalized tables, PK/FK constraints, CHECK constraints for valid code_type/claim_status/confidence_tier values
-- SQL Views — 4 views (`v_claim_validation`, `v_denial_risk_summary`, `v_top_risky_pairings`, `v_payer_denial_summary`) encapsulating the validation logic
+- MySQL (MySQL Workbench) — 4 tables, one composite primary key (`icd10_code`, `proc_code`) on `crosswalk`
+- SQL Views — 1 view (`v_claims`) doing the entire join and decision computation
 
 **SQL Techniques**
-- Multi-table joins (INNER JOIN, LEFT JOIN)
-- `COALESCE()` for defaulting unmatched pairings to `NO_MATCH`
-- `INSERT ... SELECT` to populate audit/feedback tables directly from view output
-- Conditional aggregation (`SUM(condition)`, `CASE WHEN`) inside `GROUP BY` queries
-- `ROUND()`, `GROUP BY`, `HAVING` for summary/drill-down views
+- `LEFT JOIN` from claims to the crosswalk table, so unmatched pairings surface instead of disappearing
+- `COALESCE()` to label unmatched pairings `NO_MATCH`
+- A single `CASE` statement mapping each confidence tier directly to one decision, with no secondary condition to check
 
 **Data Sources**
 | Code Set | Source | License |
@@ -102,40 +89,38 @@ Diagnosis-procedure validation can never be a fully solved, static problem: code
 | CPT (procedures) | AMA | Copyrighted — numeric codes + generic labels only, not official descriptor text |
 
 **Analytics/BI Layer**
-- Excel — dashboard with KPI cards driven by live formulas (`COUNTIF`, `COUNTIFS`, `SUMIF`), not hardcoded numbers
-- Excel Charts — denial rate by confidence tier, denial rate by payer
-- CSV exports — structured for direct import into Power BI if a more interactive front end is needed later
+- Excel — three-tab workbook (ReadMe, Dataset, Dashboard); KPI cards driven by live formulas (`COUNTIF`, `COUNTIFS`), not hardcoded numbers
+- Excel Charts — decision outcome by crosswalk confidence tier
 
 **Supporting Tools**
-- MySQL Workbench — schema design, script execution, data import
-- Python — used only in the build phase to generate 200 synthetic claim records with realistic mismatch/denial probability logic
+- Python — used only in the build phase to generate 150 synthetic claims with a realistic mix of matched and unmatched pairings
+- SQLite — used only in the validation phase to independently confirm the view's output before delivery
 
 ## Repository Contents
 
 ```
-├── Healthcare_Project_Code.sql                        # Complete MySQL schema + sample data + views (run this end-to-end)
-├── Healthcare_Billing_Dashboard.xlsx                  # Excel dashboard (Dataset sheet + Dashboard sheet, live formulas)
-├── Healthcare_Billing_Case_Study.docx                 # Full write-up: problem, solution, impact, risk management
-├── Healthcare_Billing_Project_Tech_Stack_Summary.docx # Tech-stack-focused summary
+├── crosswalk_project.sql              # Complete MySQL schema + sample data + view (run this end-to-end)
+├── crosswalk_dashboard.xlsx           # Excel dashboard (ReadMe, Dataset, Dashboard tabs, live formulas)
+├── Crosswalk_Simple_Case_Study.docx   # Full write-up: problem, solution, impact, risk management
+├── Crosswalk_Simple_Tech_Stack.docx   # Tech-stack-focused summary
 └── README.md
 ```
 
 ## How to Run This
 
 1. Open MySQL Workbench, connect to your local server
-2. File → Open SQL Script → select `Healthcare_Project_Code.sql`
-3. Execute All (lightning bolt icon) — this drops/recreates a `healthcare_billing` database, builds all 6 tables, loads sample data, creates the 4 validation views, and runs sanity-check queries automatically
-4. Confirm the denial-rate gradient shows up as expected: `SELECT * FROM v_denial_risk_summary;` should show NO_MATCH with a clearly higher denial rate than HIGH
-5. For the dashboard: open `Healthcare_Billing_Dashboard.xlsx` in Excel. The Dataset sheet holds the flat claim-level data; the Dashboard sheet's KPIs and charts are all live formulas referencing it — edit a row in Dataset and watch the Dashboard update
+2. File → Open SQL Script → select `crosswalk_project.sql`
+3. Execute All (lightning bolt icon) — this drops/recreates a `crosswalk_db` database, builds all 4 tables, loads sample data, and creates the `v_claims` view
+4. Confirm the decision split: `SELECT * FROM v_claims;` or run the summary query at the bottom of the script
+5. For the dashboard: open `crosswalk_dashboard.xlsx` in Excel. The Dataset tab holds the flat claim-level data; the Dashboard tab's KPIs and chart are all live formulas referencing it — edit a row in Dataset and watch the Dashboard update
 
 > Note: MySQL only enforces `CHECK` constraints from version 8.0.16 onward. Run `SELECT VERSION();` first if constraints seem to be ignored.
 
 ## Limitations
 
-- The `code_pairings_reference` logic is illustrative/synthetic — built to demonstrate the validation approach, not sourced from a specific payer's actual LCD/NCD medical-necessity policy documents. A production system would need to ingest real payer coverage policies.
-- CPT code descriptions are shown only as short generic labels, not the AMA's official descriptor text, due to CPT licensing restrictions.
-- The claims dataset (200 rows) is synthetically generated to demonstrate the risk-tiering pattern; it is not real patient or billing data.
+- Crosswalk confidence grades are illustrative and synthetic, built to demonstrate the approach — not sourced from an actual payer's crosswalk policy.
+- The 150-claim dataset is synthetically generated to demonstrate the decision pattern; it is not real patient or billing data.
 
 ---
 
-*Built as a self-directed portfolio project applying SQL database design and denial-risk analytics to healthcare billing workflows.*
+*Built as a self-directed portfolio project applying SQL database design to healthcare diagnosis-procedure crosswalk validation.*
